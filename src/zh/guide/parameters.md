@@ -23,7 +23,7 @@
 
 filter 支持正则表达式。由于正则部分特性可被利用于 DoS (ReDOS)，默认引擎`re2`屏蔽了部分`Regexp`功能，且在部分情况下表现不一致。具体差异可以[查看文档](https://github.com/uhop/node-re2#limitations-things-re2-does-not-support)
 
-如果需要指定不同的引擎，请参考[功能特性 -> FILTER_REGEX_ENGINE](/zh/deploy/config#功能特性)。
+如果需要指定不同的引擎，请参考[功能特性 -> FILTER_REGEX_ENGINE](/zh/deploy/config#pei-zhi-gong-neng-te-xing)。
 
 :::
 
@@ -86,7 +86,7 @@ filter 支持正则表达式。由于正则部分特性可被利用于 DoS (ReDO
 
 ## 访问控制
 
-可以使用 `code` 或 `key` 进行访问控制。参考[访问控制配置](/zh/deploy/config#访问控制配置)。
+可以使用 `code` 或 `key` 进行访问控制。参考[访问控制配置](/zh/deploy/config#pei-zhi-fang-wen-kong-zhi-pei-zhi)。
 
 ## 输出 Telegram 即时预览链接
 
@@ -114,6 +114,14 @@ Telegram 即时预览模式需要在官网制作页面处理模板，请前往[�
 
 ## 多媒体处理
 
+-   `show_image`: 默认为 `true`，保留图片。设为 `false` 时，移除条目正文图片、订阅和条目封面、缩略图及图片附件；音频和视频保留，但视频的 `poster` 封面会移除。
+
+例如 `/github/issue/DIYgod/RSSHub?show_image=false`。此参数适用于 RSS 2.0、Atom 和 JSON Feed 输出。
+
+-   `enclosure`: 默认不自动提取。设为 `true` 时，将条目正文中的图片、音频、视频和可下载文件直链提取为附件，同时保留 HTML 正文。只提取有已知文件扩展名或声明媒体类型的 HTTP(S) 链接，跳过嵌入式播放器和 data/blob 链接；保留已有附件并按 URL 去重。此过程不会额外请求媒体服务器，也不会寻找播放器背后的下载地址。
+
+例如 `/github/issue/DIYgod/RSSHub?enclosure=true&format=atom`。Atom 和 JSON Feed 支持多个附件；RSS 2.0 在路由未指定 enclosure 时使用第一个附件。自动提取时优先音频和视频，再处理图片；未知的 RSS 附件长度用 `0` 表示，Atom 则省略未知长度。`show_image=false` 也会排除提取的图片。对于路由已经提供的附件，Atom 即使未开启此参数也会输出 enclosure 链接。
+
 :::warning
 
 这是个测试中的 API
@@ -123,6 +131,7 @@ Telegram 即时预览模式需要在官网制作页面处理模板，请前往[�
 :::
 
 -   `image_hotlink_template`: 用于处理描述中图片的 URL，绕过防盗链等限制，留空不生效。用法参考 [#2769](https://github.com/DIYgod/RSSHub/issues/2769)。可以使用 [URL](https://developer.mozilla.org/en-US/docs/Web/API/URL#Properties) 的所有属性（加上后缀 `_ue` 则会对其进行 URL 编码），格式为 JS 变量模板。例子：`${protocol}//${host}${pathname}`, `https://i3.wp.com/${host}${pathname}`, `https://images.weserv.nl?url=${href_ue}`
+-   `image_hotlink_domains`: 用逗号分隔需要应用 `image_hotlink_template` 的完整主机名，例如 `example.com,images.example.com`。只按主机名精确匹配，不包含协议、路径、端口或通配符；子域名需单独列出。需设置 `ALLOW_USER_HOTLINK_TEMPLATE=true` 并提供非空的 `image_hotlink_template`。省略或留空时不限制域名。若配置了 `HOTLINK_TEMPLATE`，则以该配置为准，忽略此参数。
 -   `multimedia_hotlink_template`: 用法同 `image_hotlink_template`，但应用于音频和视频。注意：该服务必须跟随跳转、允许反代音频和视频，且必须在反代时丢弃 `Referer` 请求头。[这里有一个符合要求的易于自行搭建的项目](https://github.com/Rongronggg9/rsstt-img-relay/blob/main/README_zh-CN.md)，该项目接受直接拼接 URL，即 `https://example.com/${href}`，其中 `example.com` 应替换为自行搭建的服务的域名
 -   `wrap_multimedia_in_iframe`: 将音频和视频包裹在 `<iframe>` 中，以阻止阅读器发送 `Referer` 请求头。支持该变通解决方案的阅读器较少，且可能造成显示错误。有些阅读器，如 RSS Guard、Akregator，可能不支持前一种方法，则可尝试此方法。设置为 `1` 生效
 
@@ -131,6 +140,8 @@ Telegram 即时预览模式需要在官网制作页面处理模板，请前往[�
 ## 输出格式
 
 RSSHub 同时支持 RSS 2.0、Atom、JSON Feed 和 RSS3 输出格式，在路由添加 `format` 参数（值为`rss`、`atom`、`json` 或 `rss3`）即可请求对应输出格式，缺省为 RSS 2.0
+
+RSS 2.0 的条目作者使用 Dublin Core。所有 RSS 2.0 输出都会声明 `xmlns:dc="http://purl.org/dc/elements/1.1/"`，非空的 `item.author`（包括邮箱地址）统一输出为 `<dc:creator>`，不再输出 `<author>`。路由开发者仍填写 `author` 字段。此变化不影响 Atom、JSON Feed、`<itunes:author>` 或条目的 GUID。
 
 举例:
 

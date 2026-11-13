@@ -85,7 +85,7 @@ E.g. Bilibili article [https://rsshub.app/bilibili/user/article/334958638?mode=f
 
 ## Access Control
 
-Set `key` or `code` to grant access to requests. See [Access Control Configuration](/deploy/config#access-control-configurations).
+Set `key` or `code` to grant access to requests. See [Access Control Configuration](/deploy/config#configuration-access-control-configurations).
 
 ## Telegram Instant View
 
@@ -113,6 +113,14 @@ E.g. [https://rsshub.app/theinitium/channel/latest/zh-hans?opencc=t2s](https://r
 
 ## Multimedia processing
 
+-   `show_image`: images are kept by default (`true`). Set it to `false` to remove images from entry content, feed and entry covers, thumbnails, and image attachments. Audio and video are kept, but video `poster` images are removed.
+
+For example, `/github/issue/DIYgod/RSSHub?show_image=false`. This parameter applies to RSS 2.0, Atom and JSON Feed output.
+
+-   `enclosure`: automatic extraction is disabled by default. Set it to `true` to expose direct images, audio, video and downloadable files from entry content as attachments while retaining the HTML content. Only HTTP(S) URLs with a recognized file extension or a declared media type are extracted; embedded players and data/blob URLs are skipped. Existing attachments are preserved and duplicate URLs are removed. This does not make extra requests to media servers or discover download links behind players.
+
+For example, `/github/issue/DIYgod/RSSHub?enclosure=true&format=atom`. Atom and JSON Feed can expose multiple attachments; RSS 2.0 uses the first attachment when the route has no explicit enclosure. Audio and video are extracted before images. Unknown RSS enclosure lengths are represented as `0`; Atom omits an unknown length. `show_image=false` also excludes extracted images. Atom now includes enclosure links for attachments explicitly supplied by routes, even without this parameter.
+
 :::warning
 
 This is an experimental API
@@ -122,6 +130,7 @@ This is an experimental API
 :::
 
 -   `image_hotlink_template`: replace image URL in the content to avoid anti-hotlink protection, leave it blank to disable this function. Usage reference [#2769](https://github.com/DIYgod/RSSHub/issues/2769). You may use any property listed in [URL](https://developer.mozilla.org/en-US/docs/Web/API/URL#Properties) (suffixing with `_ue` results in URL encoding), format of JS template literal. e.g. `${protocol}//${host}${pathname}`, `https://i3.wp.com/${host}${pathname}`, `https://images.weserv.nl?url=${href_ue}`
+-   `image_hotlink_domains`: a comma-separated list of exact hostnames to which `image_hotlink_template` applies, such as `example.com,images.example.com`. Use hostnames without a scheme, path, port, or wildcard; list subdomains separately. Requires `ALLOW_USER_HOTLINK_TEMPLATE=true` and a nonempty `image_hotlink_template`. Omitting this parameter or leaving it empty imposes no hostname restriction. If `HOTLINK_TEMPLATE` is configured, it takes precedence and this parameter is ignored.
 -   `multimedia_hotlink_template`: the same as `image_hotlink_template` but apply to audio and video. Note: the service must follow redirects, allow reverse-proxy for audio and video, and must drop the `Referer` header when reverse-proxying. [Here is an easy-to-deploy project that fits these requirements](https://github.com/Rongronggg9/rsstt-img-relay). The project accepts simple URL concatenation, e.g. `https://example.com/${href}`, in which `example.com` should be replaced with the domain name of the service you've deployed
 -   `wrap_multimedia_in_iframe`: wrap audio and video in `<iframe>` to prevent the reader from sending `Referer` header. This workaround is only compatible with a few readers, such as RSS Guard and Akregator, which may not support the previous method. You can try this method in such a case
 
@@ -130,6 +139,8 @@ There are more details in the [FAQ](/guide/faq).
 ## Output Formats
 
 RSSHub conforms to RSS 2.0, Atom, JSON Feed, and RSS3 Protocol. To obtain the feed in a specific format, simply add the `format` parameter with the value `rss`, `atom`, `json`, or `rss3` to the feed address to obtain the feed in the corresponding format. The default output format is RSS 2.0.
+
+RSS 2.0 entry authors use Dublin Core. Every RSS 2.0 feed declares `xmlns:dc="http://purl.org/dc/elements/1.1/"`, and every nonempty `item.author`, including email addresses, is emitted as `<dc:creator>` instead of `<author>`. Route developers still use the `author` field. This change does not affect Atom, JSON Feed, `<itunes:author>`, or entry GUIDs.
 
 E.g.
 
@@ -168,7 +179,7 @@ For example：
 
 ## Summarized by ChatGPT (Self-hosted)
 
-Set the parameter `chatgpt` to generate a summary by ChatGPT. See [Install](/deploy/config#other-application-configurations) for details. Please consider the necessity of this feature, because it will consume some tokens.
+Set the parameter `chatgpt` to generate a summary by ChatGPT. See [Install](/deploy/config#configuration-other-application-configurations) for details. Please consider the necessity of this feature, because it will consume some tokens.
 
 -   `chatgpt`: set to any value
 

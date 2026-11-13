@@ -16,6 +16,10 @@ Configure RSSHub by setting environment variables
 
 `REQUEST_TIMEOUT`: milliseconds to wait for the server to end the response before aborting the request with error, default to `3000`
 
+`REQUEST_AUTO_SELECT_FAMILY`: controls Node's address-family autoselection for outgoing connections made by RSSHub's default dispatcher and TLS-version-specific agents. Leaving it unset preserves Node's default. `true` lets Node automatically attempt IPv4 and IPv6 addresses; `false` disables automatic family selection without forcing IPv4. This setting is not used in Workers and does not change RSSHub's listening address.
+
+`REQUEST_RATE_LIMITS`: JSON object of outgoing request limits keyed by exact hostname, default `{}`. Each policy requires `points` (a positive integer number of requests) and `duration` (a positive number of seconds). For example, `{"api.example.com":{"points":2,"duration":1}}` spaces request starts at least 0.5 seconds apart and queues excess requests. Subdomains are separate hosts. Limits are local to each Node process or Worker isolate and do not coordinate multiple instances. The existing Node global limit of 10 outgoing requests per second remains in effect. Only requests through RSSHub's fetch wrapper are covered, not requests made inside browser sessions.
+
 `UA`: user agent, using random user agent (Chrome on macOS) by default
 
 `NO_RANDOM_UA`: disable random user agent, default to `null`
@@ -42,11 +46,23 @@ RSSHub supports two caching methods: memory and redis, it is recommended to use 
 
 Partial routes have a strict anti-crawler policy, and can be configured to use proxy.
 
-`PROXY_URI`: The proxy URI should be in the format `{protocol}://{host}:{port}`. Supported protocols: `http`, `https`, `socks` and `socks5`. Note that `socks4`, `socks4a` and `socks5h` are not supported, `socks` and `socks5` resolve DNS through the proxy, i.e. they behave as `socks5h`.
+::: tip Proxy provider
+[Proxy-Seller](https://proxy-seller.com/?utm_source=rsshub) offers residential, ISP, datacenter IPv4/IPv6, and mobile proxies across 220+ locations, and can be used for RSSHub routes that require proxy access. Use promo code `RSSHUB` for 15% off ISP, IPv4, and residential proxies.
+
+Set your Proxy-Seller proxy endpoint in `PROXY_URI` using the `{protocol}://{host}:{port}` format. If authentication is required, add Base64-encoded credentials to `PROXY_AUTH`. Use `PROXY_URL_REGEX` to define which target URLs should be routed through the proxy.
+:::
+
+`PROXY_URI`: The proxy URI should be in the format `{protocol}://{host}:{port}`. Supported protocols: `http`, `https`, `socks`, `socks5` and `socks5h`. `socks4` and `socks4a` are not supported, and setting them disables the proxy. Use `socks5h` or `socks` to resolve DNS through the proxy.
 
 `PROXY_AUTH`: Authentication credentials for the proxy server, will add header `Proxy-Authorization: Basic ${PROXY_AUTH}`
 
 `PROXY_URL_REGEX`: Regular expression of URL to enable proxy, all enabled by default `.*`
+
+::: tip
+
+For failover or load balancing across multiple proxies, set `PROXY_URI` to a [gost](https://github.com/go-gost/gost) instance. You can then change proxies in gost without restarting RSSHub and losing the in-memory cache.
+
+:::
 
 ## Access Control Configurations
 
@@ -104,7 +120,7 @@ healthcheck:
 
 :::tip New Config Format
 
-We are currently testing out a new format, providing end-user with more flexibility. For more info, please refer to [Parameters->Multimedia processing](/guide/parameters#multimedia-processing).
+We are currently testing out a new format, providing end-user with more flexibility. For more info, please refer to [Parameters->Multimedia processing](/guide/parameters#parameters-multimedia-processing).
 
 When using our new config, please leave the following environment vairable blank. By default, image hotlink template will be forced when present.
 
@@ -134,9 +150,9 @@ Configs in this sections are in beta stage, and **are turn off by default**. Ple
 
 :::
 
-`ALLOW_USER_HOTLINK_TEMPLATE`: [Parameters->Multimedia processing](/guide/parameters#multimedia-processing)
+`ALLOW_USER_HOTLINK_TEMPLATE`: [Parameters->Multimedia processing](/guide/parameters#parameters-multimedia-processing)
 
-`FILTER_REGEX_ENGINE`: Define Regex engine used in [Parameters->filtering](/guide/parameters#filtering). Valid value are `[re2, regexp]`. Default value is `re2`. We suggest public instance should leave this value to default, and this option right now is mainly for backward compatibility.
+`FILTER_REGEX_ENGINE`: Define Regex engine used in [Parameters->filtering](/guide/parameters#parameters-filtering). Valid value are `[re2, regexp]`. Default value is `re2`. We suggest public instance should leave this value to default, and this option right now is mainly for backward compatibility.
 
 `ALLOW_USER_SUPPLY_UNSAFE_DOMAIN`: allow users to provide a domain as a parameter to routes that are not in their allow list, respectively. Public instances are suggested to leave this value default, as it may lead to [Server-Side Request Forgery (SSRF)](https://owasp.org/www-community/attacks/Server_Side_Request_Forgery)
 
@@ -150,13 +166,17 @@ Configs in this sections are in beta stage, and **are turn off by default**. Ple
 
 `NODE_NAME`: node name, used for load balancing, identify the current node
 
-`PUPPETEER_WS_ENDPOINT`: browser WebSocket endpoint which can be used as an argument to puppeteer.connect, refer to [browserWSEndpoint](https://pptr.dev/api/puppeteer.browser.wsendpoint)
+`USER_ROUTES_PATH`: directory containing private route modules, unset by default. Supported in Node and Docker deployments. Put standalone `.mjs` ES modules that export `namespace` and `routes` in this directory; modules are loaded at startup, so changes require a restart. Private namespaces cannot override built-in namespaces. Setting this variable does not add access protection; configure `ACCESS_KEY` or protect the instance separately when needed. See [Private routes](/deploy#private-routes) for module format and mounting instructions.
 
-`CHROMIUM_EXECUTABLE_PATH`: path to the Chromium (or Chrome) executable. If puppeteer is not bundled with Chromium (manually skipped downloading or system architecture is arm/arm64), configuring this can effectively enable puppeteer. Or alternatively, if you prefer Chrome to Chromium, this configuration will help. **WARNING**: only effective when `PUPPETEER_WS_ENDPOINT` is not set; only useful for manual deployment, for Docker, please use the `chromium-bundled` image instead.
+`PLAYWRIGHT_WS_ENDPOINT`: remote browser WebSocket endpoint using the [Playwright protocol](https://playwright.dev/docs/api/class-browsertype#browser-type-connect). The server must use a compatible Playwright version. Do not put a Chromium CDP endpoint in this variable. `PUPPETEER_WS_ENDPOINT` remains a fallback alias when `PLAYWRIGHT_WS_ENDPOINT` is unset.
+
+`PLAYWRIGHT_CDP_ENDPOINT`: Chromium [Chrome DevTools Protocol endpoint](https://playwright.dev/docs/api/class-browsertype#browser-type-connect-over-cdp) for Node deployments. The Docker Compose Browserless V2 service uses `ws://browserless:3000?token=<token>`, where the token must match the Browserless service's `TOKEN`. In Node, this setting takes precedence over `PLAYWRIGHT_WS_ENDPOINT` and a locally launched browser. Workers use `PLAYWRIGHT_WS_ENDPOINT` or their Browser Run binding instead.
+
+`CHROMIUM_EXECUTABLE_PATH`: path to the local Chromium or Chrome executable used by Playwright. It applies when neither a CDP nor a WebSocket endpoint is configured. For Docker deployments that use a local browser, use the `chromium-bundled` image.
 
 `TITLE_LENGTH_LIMIT`: limit the length of feed title generated in bytes, an English alphabet counts as 1 byte, the rest such as Chinese, Japanese, Korean or Arabic counts as 2 bytes by design, default to `150`
 
-`FORMAT`: [output format](/guide/parameters#output-formats), default to `rss`; the `format` parameter, if specified in the feed address, will override this setting
+`FORMAT`: [output format](/guide/parameters#parameters-output-formats), default to `rss`; the `format` parameter, if specified in the feed address, will override this setting
 
 `OPENAI_API_KEY`: OpenAI API Key, used for using ChatGPT to summarize articles
 
@@ -172,7 +192,7 @@ Configs in this sections are in beta stage, and **are turn off by default**. Ple
 
 `REMOTE_CONFIG`: Remote configuration URL, used for dynamically updating configurations. The address should return a JSON with an environment variable name as the key. It will be loaded and merged with local configurations when the application starts. In case of conflicts with local configurations, remote configurations will take precedence. But please note that some basic configuration items do not support remote retrieval.
 
-## Route-specific Configurations {#route-specific-configurations}
+## Route-specific Configurations
 
 :::tip
 
@@ -227,6 +247,10 @@ See docs of the specified route and `lib/config.ts` for detailed information.
     4.  找到 `https://webapp.bupt.edu.cn/extensions/wap/news/list.html?p-1&type=xnxw` 请求
     5.  找到请求头中的 Cookie
 
+### Ci-en
+
+-   `CI_EN_COOKIE`: optional Cookie request header value from your signed-in Ci-en account, used by `/dlsite/ci-en/:id/article`. The same Cookie is sent for the article list and details, and detail caches are separated by Cookie value. Leave it unset for public articles. Access to subscriber articles remains limited to your account and subscribed plans.
+
 ### Civitai
 
 -   `CIVITAI_COOKIE`: Cookie of Civitai
@@ -257,7 +281,11 @@ See docs of the specified route and `lib/config.ts` for detailed information.
 
 ### douban
 
--   `DOUBAN_COOKIE`: Cookie of douban user
+-   `DOUBAN_COOKIE`: Cookie from your own signed-in Douban account. Used by personal lists and by group topics that require login; public group topics can be accessed without it. The account must have access to the requested content.
+
+`/douban/group/topic/:id/:author?` tracks the main post and the first page of replies. `author` defaults to `all`; use `author` to request the source website's author-only view. Changes to the main post title or body produce a new GUID. Replies keep their source creation times. The source sorts replies from oldest to newest, so new replies on later pages of a long topic are not covered.
+
+User broadcasts and gallery topics add source IP locations to categories when the detail page provides them: `IP属地：…` for the author and `回帖IP属地：…` for first-page replies. You can use the common `filter_category` parameter, for example `filter_category=^IP属地：广东$`. Profile locations are not used as IP locations. Details hidden from anonymous visitors require `DOUBAN_COOKIE`; if an IP field is unavailable, it is omitted.
 
 ### E-Hentai
 
@@ -292,12 +320,7 @@ See docs of the specified route and `lib/config.ts` for detailed information.
 
 ### Instagram
 
--   `IG_USERNAME`: Your Instagram username (Private API only)
--   `IG_PASSWORD`: Your Instagram password (Private API only)
--   `IG_PROXY`: Proxy URL for Instagram (Private API only, optional)
--   `IG_COOKIE`: Your Instagram cookie (Cookie only)
-
-Warning: Two Factor Authentication is **not** supported.
+-   `INSTAGRAM_COOKIE`: Your Instagram cookie, only the `sessionid` and `ds_user_id` cookies are required. Optional for public profiles, required for stories, highlights, hashtags and private profiles. `IG_COOKIE` is still accepted as a fallback.
 
 ### Iwara
 
@@ -432,9 +455,13 @@ It is recommended to use a non-important account, new accounts or logins from di
 -   `TWITTER_PASSWORD`: Twitter password
 -   `TWITTER_PHONE_OR_EMAIL`: Optional, Twitter phone or email
 -   `TWITTER_AUTHENTICATION_SECRET`: Optional, Twitter Two-factor authentication -> Authentication app -> Secret part in `otpauth://totp/Twitter:@_RSSHub?secret=xxxxxxxxxxxxxxxx&issuer=Twitter`
+-   `TWITTER_AUTH_TOKEN`: The `auth_token` Cookie value from your own authorized X session. Required by `/twitter/spaces/:username`; developer API keys and third-party timeline providers do not supply this route's speaker status. Configure it on your own instance and refresh expired sessions.
+
+`/twitter/spaces/:username` reports when the user hosts, co-hosts, or speaks in a live Space, including Spaces hosted by someone else. Listeners are excluded. Entries use the actual Space start time and a stable user/Space GUID; when no speaking session is found, the route emits a fixed status entry without a publication date. The route does not join or listen to the Space.
 
 ### Wordpress
 
+-   `WORDPRESS_ALLOWED_DOMAINS`: comma-separated exact hostnames permitted by the WordPress route while `ALLOW_USER_SUPPLY_UNSAFE_DOMAIN` remains disabled, for example `wordpress.org,blog.example.com`. Empty by default. Whitespace is trimmed and matching is case-insensitive. Use hostnames without a scheme, port, path or wildcard; list each subdomain explicitly. Enabling `ALLOW_USER_SUPPLY_UNSAFE_DOMAIN` instead allows arbitrary WordPress hostnames.
 -   `WORDPRESS_CDN`: Proxy HTTP image link with HTTPS link. Consider using:
 
     | url                                    | backbone     |
@@ -476,11 +503,19 @@ It is recommended to use a non-important account, new accounts or logins from di
 -   `DIDA365_USERNAME`: 滴答清单用户名
 -   `DIDA365_PASSWORD`: 滴答清单密码
 
-### 豆瓣
+### Douyin
 
-用于想看
+`/douyin/live/:rid/:showTime?` keeps its existing title by default. Set `showTime` to `1` or `true` to append the time RSSHub first detected the current live event, in UTC+8. This is an observation time, not the source's actual start time, and is not used as `pubDate`. It is cached by the event's real room ID for 30 days without extending its lifetime on reads. Clearing the cache or restarting an instance with memory caching resets the record; use Redis to retain it across restarts.
 
--   `DOUBAN_COOKIE`: 豆瓣登陆后的 Cookie 值
+-   `DOUYIN_COOKIE`: The Cookie request header from your own signed-in Douyin web session. It is required for `/douyin/likes/self` and `/douyin/collection`; for `/douyin/likes/:uid`, the liked list must be visible to the current account. The routes read only the first screen and use each video's original publication time, because Douyin does not provide the time it was liked or collected. Keep this configuration on an instance with access control. Refresh the Cookie when the session expires.
+
+    To obtain it, sign in to [Douyin](https://www.douyin.com), open the browser's Network panel, select the liked or collected videos tab, and copy the `Cookie` request header of the corresponding `aweme/favorite` or `aweme/listcollection` request. Do not put it in a subscription URL. The collection route covers collected videos; folders, music, series, and short dramas are outside its scope.
+
+### Xueqiu
+
+`/xueqiu/column/:id` also uses the configured Cookie for both the profile and its timeline. Without it, the route tries an anonymous visitor session; columns that hide posts from that session require a signed-in account with access.
+
+-   `XUEQIU_COOKIES`: The Cookie request header from your own signed-in [Xueqiu](https://xueqiu.com) browser session. `/xueqiu/user_stock/:id` requires it, and `/xueqiu/snb/:id` uses it when configured. The account must be able to view the requested watchlist or portfolio on the source website. Refresh expired sessions; inaccessible data produces an authorization error instead of a successful empty feed.
 
 ### 饭否
 
@@ -523,7 +558,9 @@ It is recommended to use a non-important account, new accounts or logins from di
 
 -   `WEIBO_APP_KEY`: 微博 App Key
 -   `WEIBO_APP_SECRET`: 微博 App Secret
--   `WEIBO_REDIRECT_URL`: 微博登录授权回调地址，默认为 `RSSHub 地址/weibo/timeline/0`，自定义回调地址请确保最后可以转跳到 `RSSHub 地址/weibo/timeline/0?code=xxx`
+-   `WEIBO_REDIRECT_URL`: Weibo OAuth callback URL, defaulting to `<RSSHub request origin>/weibo/timeline/0`. A custom callback must forward both OAuth query parameters, `code` and `state`, unchanged to `<RSSHub URL>/weibo/timeline/0?code=<oauth-code>&state=<returned-state>`.
+
+    When `ACCESS_KEY` is enabled, first open the desired timeline route with a valid RSSHub `key` or access `code` to start authorization. RSSHub creates a one-time `state` valid for ten minutes and consumes it when the callback returns, then redirects to the final subscription URL with its route-specific access code. This requires an available memory or Redis cache; HTTP and KV cache backends do not support this protected callback flow. Start authorization again if the state expires or has already been used. The configured `WEIBO_REDIRECT_URL` must not contain RSSHub `key` or access `code` parameters; preserve the OAuth `code` and `state` returned by Weibo instead.
 
 用于自定义分组
 

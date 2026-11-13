@@ -54,9 +54,12 @@ There are several tags available:
 | --- | --- | --- | --- |
 | `latest` | Latest version  | No  | `latest` |
 | `chromium-bundled`  | Latest version with Chromium bundled in  | Yes | `chromium-bundled`|
-| `{YYYY-MM-DD}`   | Specific date of the release    | No     | `2021-06-18` |
-| `chromium-bundled-{YYYY-MM-DD}` | Specific date of the release with Chromium bundled in | Yes | `chromium-bundled-2021-06-18` |
+| `{YYYY-MM-DD}`   | Daily build; may be updated by later builds that day | No     | `2021-06-18` |
+| `chromium-bundled-{YYYY-MM-DD}` | Daily build with Chromium; may be updated that day | Yes | `chromium-bundled-2021-06-18` |
 | `{commit hash}` | Specific commit | No | `e7c233b1df982fae10684a11c9df57892e96940a` |
+| `chromium-bundled-{commit hash}` | Specific commit with Chromium bundled in | Yes | `chromium-bundled-e7c233b1df982fae10684a11c9df57892e96940a` |
+
+After publishing both multi-platform image variants, the release workflow creates a [GitHub source release](https://github.com/DIYgod/RSSHub/releases) tagged `vYYYY.MM.DD-<7-character-SHA>`, using the UTC release date. Its release notes list the full source commit and corresponding image tags. To pin a Docker deployment to that release, use the full 40-character commit SHA, or `chromium-bundled-<full-SHA>`, as the image tag. For example, `ghcr.io/diygod/rsshub:<full-SHA>`. Daily tags can change after another build on the same day.
 
 While supporting puppeteer may consume more resources, it also supports a wider range of routes.
 
@@ -107,6 +110,29 @@ $ docker-compose up -d
 ### Configuration
 
 Edit `environment` in [docker-compose.yml](https://github.com/DIYgod/RSSHub/blob/master/docker-compose.yml)
+
+### Browserless V2 {#browserless-v2}
+
+The current Compose file uses [Browserless V2](https://docs.browserless.io/enterprise/open-source) with the `ghcr.io/browserless/chromium` image. These entries connect RSSHub to the browser service over CDP:
+
+```yaml
+services:
+    rsshub:
+        environment:
+            PLAYWRIGHT_CDP_ENDPOINT: 'ws://browserless:3000?token=${BROWSERLESS_TOKEN:-rsshub}'
+    browserless:
+        image: ghcr.io/browserless/chromium
+        environment:
+            TOKEN: '${BROWSERLESS_TOKEN:-rsshub}'
+        healthcheck:
+            test: ['CMD-SHELL', 'curl -f "http://localhost:3000/pressure?token=$$TOKEN"']
+```
+
+Set `BROWSERLESS_TOKEN` in the Compose `.env` file so that the endpoint's `token` and Browserless's `TOKEN` match. The checked-in file uses `rsshub` when the variable is unset. Keep the existing Redis, ports, dependencies, and RSSHub and Redis health checks when merging this excerpt. Update the Browserless health check to include its token as shown above. `$$TOKEN` passes `$TOKEN` to the container shell for expansion instead of having Compose expand it on the host.
+
+An image update does not replace a Compose file you already downloaded. To migrate an existing deployment, manually update the Browserless image, replace its old WebSocket setting with `PLAYWRIGHT_CDP_ENDPOINT`, add the matching `TOKEN`, and update the Browserless health check. Then pull the images and recreate the services with `docker-compose pull` and `docker-compose up -d`.
+
+`PLAYWRIGHT_CDP_ENDPOINT` uses the Chrome DevTools Protocol. `PLAYWRIGHT_WS_ENDPOINT` is for a [native Playwright server endpoint](https://playwright.dev/docs/api/class-browsertype#browser-type-connect), which uses a different protocol and must match the client's Playwright version. Use the CDP setting for the Browserless service shown above.
 
 ## Docker Deployment
 
@@ -163,7 +189,56 @@ $ docker run -d --name rsshub -p 1200:1200 -e CACHE_EXPIRE=3600 -e GITHUB_ACCESS
 
 This deployment method does not include puppeteer (unless using `diygod/rsshub:chromium-bundled` instead) and Redis dependencies. Use the Docker Compose deployment method or deploy external dependencies yourself if you need it.
 
-To configure more options please refer to [Configuration](#configuration).
+To configure more options please refer to [Configuration](#deployment-docker-compose-deployment-recommended-configuration).
+
+<span id="private-routes"></span>
+
+### Private Routes {#private-routes}
+
+Node.js and Docker deployments can load private routes from a directory of standalone `.mjs` modules without changing RSSHub's built-in routes. Each filename defines a namespace; existing namespaces and reserved service paths cannot be replaced.
+
+Create `routes-user/personal.mjs` beside your Compose file. Export `namespace` and a `routes` array, with each handler returning RSSHub's `Data` structure:
+
+```js
+export const namespace = { name: 'Personal', url: 'example.com' };
+
+export const routes = [
+    {
+        path: '/news',
+        name: 'News',
+        maintainers: [],
+        handler: async () => ({
+            title: 'Personal news',
+            link: 'https://example.com/',
+            item: [
+                {
+                    title: 'Example item',
+                    link: 'https://example.com/#item-1',
+                    description: '<p>Replace this item with content from your own source.</p>',
+                },
+            ],
+        }),
+    },
+];
+```
+
+This registers `/personal/news`. Replace the example item with your source's articles, giving each item a stable, unique `link`. Include `pubDate` when the source provides a publication time; omit it when the time is unknown.
+
+Merge the following into the existing RSSHub service to mount the modules read-only and point `USER_ROUTES_PATH` to their container path:
+
+```yaml
+services:
+    rsshub:
+        environment:
+            USER_ROUTES_PATH: /app/routes-user
+            ACCESS_KEY: '${ACCESS_KEY:?Set ACCESS_KEY in the Compose .env file}'
+        volumes:
+            - ./routes-user:/app/routes-user:ro
+```
+
+Set `ACCESS_KEY` in the Compose `.env` file and use the documented `key` or `code` parameters to authenticate subscriptions. Follow the [access control configuration](/deploy/config#configuration-access-control-configurations), including its authenticated health check configuration.
+
+For a manual Node.js deployment, set `USER_ROUTES_PATH` to the directory's absolute path on the host. Restart RSSHub after adding or editing modules. Standalone modules use JavaScript and cannot use TypeScript or RSSHub's `@/` import aliases. Runtime directory loading is available on Node.js and Docker; Workers need routes included at build time.
 
 ## Manual Deployment
 
@@ -245,7 +320,7 @@ Please notice that it will not override already existed environment variables, m
 
 This deployment method does not include Redis dependencies. Use the Docker Compose deployment method or deploy external dependencies yourself if you need it.
 
-To configure more options please refer to [Configuration](#configuration).
+To configure more options please refer to [Configuration](#deployment-docker-compose-deployment-recommended-configuration).
 
 ### Update
 
@@ -402,6 +477,22 @@ sudo ansible-playbook rsshub.yaml
 # For example, if your users use https://rsshub.example.com to access your RSSHub instance, enter rsshub.example.com (remove the https://)
 ```
 
+## Keep Your Fork Updated
+
+Deployments that build from your fork (Vercel, Heroku, Fly.io and others) only pick up RSSHub changes after the fork is updated.
+
+- Manually: on your fork's GitHub page, click "Sync fork", then "Update branch".
+- Automatically: RSSHub includes a "Sync fork" workflow that updates your fork from RSSHub once a day.
+    1.  Open the Actions tab of your fork and enable workflows, then keep only the "Sync fork" workflow enabled and disable the others.
+    2.  Create a [personal access token](https://github.com/settings/tokens) with the `workflow` scope, or a fine-grained token with read and write access to Contents and Workflows on your fork, and save it as a repository secret named `SYNC_TOKEN`. Without it the workflow uses the default token, which cannot update files under `.github/workflows/`, so the sync fails whenever RSSHub changes a workflow.
+    3.  To sync right away, run the "Sync fork" workflow from the Actions tab.
+
+::: danger
+Enabling workflows in a fork also enables RSSHub's other workflows there, such as the weekly full route test. You can disable the ones you don't need in the Actions tab.
+:::
+
+If your fork has changes that conflict with RSSHub, the sync fails and you need to resolve the conflict yourself.
+
 ## Deploy to Vercel
 
 ### Instant deploy (without automatic update)
@@ -412,7 +503,7 @@ sudo ansible-playbook rsshub.yaml
 
 1.  [Fork RSSHub](https://github.com/DIYgod/RSSHub/fork) to your GitHub account.
 2.  Deploy your fork to Vercel: Login Vercel with your GitHub account, create and deploy [new Vercel project](https://vercel.com/new/) with your RSSHub repository.
-3.  Install [Pull](https://github.com/apps/pull) app to keep your fork synchronized with RSSHub.
+3.  [Keep your fork updated](#deployment-keep-your-fork-updated) so new RSSHub changes get deployed.
 
 ::: tip
 If you encounter an `ERR_REQUIRE_ESM` error during deployment, you need to enable experimental Node.js require() of ES Module support. Add the environment variable `NODE_OPTIONS=--experimental-require-module` in your Vercel project settings. See [Vercel's documentation](https://vercel.com/docs/functions/runtimes/node-js/advanced-node-configuration#experimental-node.js-require-of-es-module) for more details.
@@ -424,7 +515,39 @@ RSSHub can be deployed to Cloudflare Workers with one click.
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/DIYgod/RSSHub)
 
-Puppeteer is supported via [Cloudflare Browser Rendering](https://developers.cloudflare.com/browser-rendering/), and caching is supported via [Cloudflare Workers KV](https://developers.cloudflare.com/kv/).
+Playwright is supported via [Cloudflare Browser Run](https://developers.cloudflare.com/browser-run/playwright/), and caching is supported via [Cloudflare Workers KV](https://developers.cloudflare.com/kv/).
+
+### Browser Session Reuse {#browser-session-reuse}
+
+When `PLAYWRIGHT_WS_ENDPOINT` is unset, RSSHub uses the `BROWSER` binding for browser requests. On this path, the repository's `wrangler.toml` configures a `BrowserSession` Durable Object to coordinate a shared Browser Run session across requests and Worker isolates. Each request uses a separate browser context. Cleanup closes that context and disconnects its Playwright client; the acquired session remains available for reuse, with a 60-second idle timeout. Expired sessions are replaced when a later request reconnects. A configured `PLAYWRIGHT_WS_ENDPOINT` takes precedence and uses the remote server instead. See Cloudflare's [Playwright session reuse](https://developers.cloudflare.com/browser-run/playwright/#session-reuse) documentation.
+
+Retain these entries when maintaining your own Wrangler configuration:
+
+```toml
+compatibility_date = "2026-09-01"
+compatibility_flags = ["global_fetch_strictly_public"]
+
+[browser]
+binding = "BROWSER"
+
+[[durable_objects.bindings]]
+name = "BROWSER_SESSIONS"
+class_name = "BrowserSession"
+
+[[migrations]]
+tag = "browser-session-v1"
+new_sqlite_classes = ["BrowserSession"]
+```
+
+The Worker entry point must also export `BrowserSession`; RSSHub's `lib/worker.ts` already does this:
+
+```ts
+export { BrowserSession } from './utils/browser-session.worker';
+```
+
+For an existing Worker using migrations, retain its previous migration entries and append the new class migration with a unique tag if `BrowserSession` has not already been created. Keep `BROWSER`, `BROWSER_SESSIONS`, the class export and the migration in sync when updating a custom configuration. The example follows the repository's migration format; consult [Durable Object class migrations](https://developers.cloudflare.com/durable-objects/reference/durable-object-class-migrations-legacy/) if your deployment uses a different lifecycle configuration.
+
+Without `BROWSER_SESSIONS`, each browser request using the `BROWSER` binding launches a Browser Run session. Session reuse can reduce repeated launches; it does not guarantee lower charges. Check your account's usage and current [Browser Run pricing](https://developers.cloudflare.com/browser-run/platform/pricing/) after deployment.
 
 ## Deploy to Zeabur
 
@@ -446,7 +569,7 @@ Puppeteer is supported via [Cloudflare Browser Rendering](https://developers.clo
 1.  [Fork RSSHub](https://github.com/DIYgod/RSSHub/fork) to your GitHub account.
 2.  Deploy your fork to Heroku: `https://heroku.com/deploy?template=URL`, where `URL` is your fork address (_e.g._ `https://github.com/USERNAME/RSSHub`).
 3.  Configure `automatic deploy` in Heroku app to follow the changes to your fork.
-4.  Install [Pull](https://github.com/apps/pull) app to keep your fork synchronized with RSSHub.
+4.  [Keep your fork updated](#deployment-keep-your-fork-updated) so new RSSHub changes get deployed.
 
 ## Deploy to Fly.io
 
@@ -462,11 +585,11 @@ Puppeteer is supported via [Cloudflare Browser Rendering](https://developers.clo
 
 3.  [Sign up for Fly.io](https://fly.io/app/sign-up) and install the [flyctl CLI](https://fly.io/docs/hands-on/install-flyctl/);
 4.  Run `fly launch` and choose a unique name and region to deploy;
-5.  Use `fly secrets set KEY=VALUE` to [configure some modules](config#route-specific-configurations);
+5.  Use `fly secrets set KEY=VALUE` to [configure some modules](config#configuration-route-specific-configurations);
 6.  [Set up automatic deployment via GitHub Actions](https://fly.io/docs/app-guides/continuous-deployment-with-github-actions/);
 7.  (Optional) Use `fly certs add your domain` to configure a custom domain, and follow the instructions to configure the related domain resolution at your DNS service provider (you can check the domain configuration status on the Dashboard Certificate page).
 
-Upgrade: On the homepage of your Forked repository, click "Sync fork - Update Branch" to manually update to the latest official master branch, or install the [Pull](https://github.com/apps/pull) GitHub app to keep your fork synchronized with upstream.
+Upgrade: On the homepage of your Forked repository, click "Sync fork - Update Branch" to manually update to the latest official master branch, or [sync it automatically](#deployment-keep-your-fork-updated).
 
 ### Method 2: Maintain fly.toml by yourself
 
@@ -479,8 +602,8 @@ Upgrade: On the homepage of your Forked repository, click "Sync fork - Update Br
    image = "diygod/rsshub:latest"
    ```
 
-   Depending on the actual situation, you may want to use other image tags, please read the relevant content of [Docker Image](#docker-image);
-4.  Modify the `[env]` section in fly.toml or use `fly secrets set KEY=VALUE` to [configure some modules](config#route-specific-configurations);
+   Depending on the actual situation, you may want to use other image tags, please read the relevant content of [Docker Image](#deployment-docker-image);
+4.  Modify the `[env]` section in fly.toml or use `fly secrets set KEY=VALUE` to [configure some modules](config#configuration-route-specific-configurations);
 5.  Execute `fly deploy` to start the application;
 6.  (Optional) Use `fly certs add your domain` to configure a custom domain, and follow the instructions to configure the related domain resolution at your DNS service provider (you can check the domain configuration status on the Dashboard Certificate page).
 
@@ -511,6 +634,10 @@ and execute `fly deploy` (if use the second install method) to trigger a redeplo
 Automatic updates are included.
 
 [![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/template/QxW__f?referralCode=9wT3hc)
+
+For a GitHub source deployment, use the repository root as the service's Root Directory. Railway builds the root `Dockerfile` automatically, which installs dependencies with the project's Corepack-managed pnpm version. Leave custom build and start commands unset so Railway uses the Dockerfile and its startup command. RSSHub reads Railway's `PORT` environment variable.
+
+If a deployment created from the template above fails with `yarn@pnpm@...` or a global Yarn version error and keeps restarting, the template has set the service's start command to `yarn start`. That command replaces the image's own startup command and runs the Yarn 1 bundled with the Node.js image. Clear the custom start command in the RSSHub service's settings (or set it to `npm run start`) and redeploy. The template also sets `CACHE_TYPE=redis` without passing the Redis address, so add a `REDIS_URL` variable to the RSSHub service that references the Redis service's `REDIS_URL`; otherwise RSSHub falls back to `localhost:6379` and nothing is cached. See Railway's [Dockerfile guide](https://docs.railway.com/builds/dockerfiles) and [start command docs](https://docs.railway.com/deployments/start-command).
 
 ## Deploy to Google App Engine(GAE)
 
@@ -597,6 +724,14 @@ The Sealos template deploys RSSHub with Redis caching, Browserless, persistent R
 Run RSSHub from just $1/month. Includes automatic updates and $5 free starting credit.
 
 [![Run on PikaPods](https://www.pikapods.com/static/run-button.svg)](https://www.pikapods.com/pods?run=rsshub)
+
+## Deploy to Pethost
+
+[Pethost](https://pethost.dev) runs RSSHub with Redis and Browserless from a one-click template and serves it over HTTPS, from €9.99/month.
+
+[![Deploy on Pethost](https://pethost.dev/button.svg)](https://console.pethost.dev/?template=rsshub)
+
+To deploy the [docker-compose.yml](https://github.com/DIYgod/RSSHub/blob/master/docker-compose.yml) above as it is, run `pethost deploy` in its folder with the [Pethost CLI](https://pethost.dev/docs/cli/). See the [Pethost guide](https://pethost.dev/blog/self-host-rsshub/) for configuration and updates.
 
 ## Play with Docker
 

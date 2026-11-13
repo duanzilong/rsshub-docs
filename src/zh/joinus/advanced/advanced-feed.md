@@ -44,14 +44,25 @@ sidebar_position: 1
 | **`updated`**     | *（可选）* 条目的最后修改日期，应该是 [Date object](https://developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/Date) | `undefinded` | A, J |
 | **`itunes_item_image`** | *（可选）* 条目相关联的图片的网址 | `undefinded` | R |
 | **`itunes_duration`** | *（可选）* 音频或视频条目的长度，以秒为单位（或格式为 H:mm:ss），应为数字或字符串 | `undefinded` | J, R |
-| **`enclosure_url`** | *（可选）* 条目相关联的附件的网址 | `undefinded` | J, R |
-| **`enclosure_length`** | *（可选）* 附件文件的大小（以 **byte** 为单位），应为数字 | `undefinded` | J, R |
-| **`enclosure_type`** | *（可选）* 附件文件的 MIME 类型，应为字符串 | `undefinded` | J, R |
+| **`enclosure_url`** | *（可选）* 条目相关联的附件的网址 | `undefinded` | A, J, R |
+| **`enclosure_length`** | *（可选）* 附件文件的大小（以 **byte** 为单位），应为数字 | `undefinded` | A, J, R |
+| **`enclosure_type`** | *（可选）* 附件文件的 MIME 类型，应为字符串 | `undefinded` | A, J, R |
+| **`attachments`** | *（可选）* 附件对象数组，包含直链 `url`、`mime_type` 和可选的 `title`、`size_in_bytes`、`duration_in_seconds`。Atom 和 JSON Feed 输出所有附件；RSS 使用第一个附件作为未指定 enclosure 时的后备。 | `undefined` | A, J, R |
 | **`upvotes`** | *（可选）* 条目的赞数，应为数字 | `undefinded` | A |
 | **`downvotes`** | *（可选）* 条目的踩数，应为数字 | `undefinded` | A |
 | **`comments`** | *（可选）* 条目的评论数，应为数字 | `undefinded` | A |
 | **`media.*`** | *（可选）* 条目相关的媒体。更多详情请参见 [媒体 RSS](https://www.rssboard.org/media-rss) | `undefinded` | R |
 | **`doi`** | *（可选）* 条目的数字对象标识符 (DOI)，应为格式为 `10.xxx/xxxxx.xxxx` 的字符串 | `undefinded` | R |
+
+<span id="item-authors"></span>
+
+## 条目作者 {#item-authors}
+
+在路由返回的数据中，将作者名称填入 `item.author`。RSSHub 在 RSS 2.0 中会将它输出为 `<dc:creator>`，使用 `http://purl.org/dc/elements/1.1/` 命名空间。路由的数据字段仍是 `author`，不要给条目添加 `dc:creator` 属性。
+
+RSS 2.0 的 [`author` 元素](https://www.rssboard.org/rss-specification#ltauthorgtSubelementOfLtitemgt)要求邮箱地址，Dublin Core 的 [`creator`](https://www.dublincore.org/specifications/dublin-core/dcmi-terms/elements11/creator/)则适合保存作者名称。RSSHub 对所有非空 `item.author` 都使用 `<dc:creator>`，包括含邮箱地址的值。没有作者的条目不会输出这两个元素。
+
+Atom 作者名称、JSON Feed 作者和播客 `<itunes:author>` 的输出格式保持原样。原先读取 RSSHub `<author>` 元素的客户端或脚本，需要改为读取 `<dc:creator>`。
 
 :::warning 格式考虑
 
@@ -103,7 +114,7 @@ export const route: Route = {
 
 ## 制作期刊订阅源
 
-RSSHub支持制作期刊订阅源。如果用户提供 [通用参数](/zh/guide/parameters#输出-sci-hub-链接) `scihub`，则可以将 `item.link` 替换为 Sci-Hub 链接。要制作期刊订阅源，您需要在您的 RSS 源中包含一个附加字段：
+RSSHub支持制作期刊订阅源。如果用户提供 [通用参数](/zh/guide/parameters#tong-yong-can-shu-shu-chu-sci-hub-lian-jie) `scihub`，则可以将 `item.link` 替换为 Sci-Hub 链接。要制作期刊订阅源，您需要在您的 RSS 源中包含一个附加字段：
 
 ```js
 return {

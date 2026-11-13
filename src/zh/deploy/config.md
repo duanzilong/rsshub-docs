@@ -16,6 +16,10 @@
 
 `REQUEST_TIMEOUT`: 请求超时毫秒数，默认 `3000`
 
+`REQUEST_AUTO_SELECT_FAMILY`: 控制 RSSHub 在 Node 中的默认 dispatcher 和指定 TLS 版本的 agent 建立出站连接时，是否自动选择地址族。不设置时保留 Node 默认行为。`true` 允许 Node 自动尝试 IPv4 和 IPv6 地址；`false` 关闭自动地址族选择，但不会强制使用 IPv4。此配置不用于 Worker，也不会改变 RSSHub 的监听地址。
+
+`REQUEST_RATE_LIMITS`: 按精确主机名配置出站请求限速的 JSON 对象，默认 `{}`。每个策略包含 `points`（正整数，请求次数）和 `duration`（正数，单位为秒）。例如 `{"api.example.com":{"points":2,"duration":1}}` 会让请求至少间隔 0.5 秒开始执行，超过速率的请求进入队列。子域名需要单独配置。限速状态仅在各 Node 进程或 Worker isolate 内共享，不协调多个实例。原有的 Node 全局每秒 10 次出站请求限制继续生效。仅经过 RSSHub fetch 封装的请求受此配置控制，浏览器会话内部发出的请求不受影响。
+
 `UA`: 用户代理，默认为随机用户代理用户代理（macOS 上的 Chrome）
 
 `NO_RANDOM_UA`: 是否禁用随机用户代理，默认 `null`
@@ -42,11 +46,23 @@ RSSHub 支持 `memory` 和 `redis` 两种缓存方式，建议使用 `redis` 以
 
 部分路由反爬严格，可以配置使用代理抓取。
 
-`PROXY_URI`: 代理 URI，格式为 `{protocol}://{host}:{port}`，protocol 支持 `http`, `https`, `socks` 和 `socks5`，不支持 `socks4`, `socks4a` 和 `socks5h`。`socks` 和 `socks5` 会通过代理解析 DNS，即行为等同于 `socks5h`
+::: tip 代理服务
+[Proxy-Seller](https://proxy-seller.com/?utm_source=rsshub) 提供住宅、ISP、数据中心 IPv4/IPv6 和移动代理，覆盖 220 多个地区，可用于需要代理访问的 RSSHub 路由。使用优惠码 `RSSHUB` 购买 ISP、IPv4 和住宅代理可享 85 折。
+
+将 Proxy-Seller 代理端点按 `{protocol}://{host}:{port}` 格式配置到 `PROXY_URI`。如果需要身份验证，请将 Base64 编码后的凭证添加到 `PROXY_AUTH`。使用 `PROXY_URL_REGEX` 定义哪些目标 URL 需要通过代理访问。
+:::
+
+`PROXY_URI`: 代理 URI，格式为 `{protocol}://{host}:{port}`，protocol 支持 `http`, `https`, `socks`, `socks5` 和 `socks5h`，不支持 `socks4` 和 `socks4a`，设置后代理会被停用。需要通过代理解析 DNS 时请使用 `socks5h` 或 `socks`。
 
 `PROXY_AUTH`: 给代理服务器的身份验证凭证，会添加 header `Proxy-Authorization: Basic ${PROXY_AUTH}`
 
 `PROXY_URL_REGEX`: 启用代理的 URL 正则表达式，默认全部开启 `.*`
+
+::: tip
+
+如需多代理故障转移或负载均衡，可将 `PROXY_URI` 设为 [gost](https://github.com/go-gost/gost) 实例。之后在 gost 中更换代理无需重启 RSSHub，内存缓存不会丢失。
+
+:::
 
 ## 访问控制配置
 
@@ -104,7 +120,7 @@ healthcheck:
 
 :::tip 新配置方式
 
-我们正在试验新的，更灵活的配置方式。如果有需要，请转到 [通用参数 -> 多媒体处理](/zh/guide/parameters#多媒体处理) 了解更多。
+我们正在试验新的，更灵活的配置方式。如果有需要，请转到 [通用参数 -> 多媒体处理](/zh/guide/parameters#tong-yong-can-shu-duo-mei-ti-chu-li) 了解更多。
 
 在使用新配置时，请将下方环境变量留空。否则默认图片模版会继续遵循下方配置。
 
@@ -134,9 +150,9 @@ healthcheck:
 
 :::
 
-`ALLOW_USER_HOTLINK_TEMPLATE`: [通用参数 -> 多媒体处理](/zh/guide/parameters#多媒体处理)特性控制
+`ALLOW_USER_HOTLINK_TEMPLATE`: [通用参数 -> 多媒体处理](/zh/guide/parameters#tong-yong-can-shu-duo-mei-ti-chu-li)特性控制
 
-`FILTER_REGEX_ENGINE`: 控制 [通用参数 -> 内容过滤](/zh/guide/parameters#内容过滤) 使用的正则引擎。可选`[re2, regexp]`，默认`re2`。我们推荐公开实例不要调整这个选项，这个选项目前主要用于向后兼容。
+`FILTER_REGEX_ENGINE`: 控制 [通用参数 -> 内容过滤](/zh/guide/parameters#tong-yong-can-shu-nei-rong-guo-lv) 使用的正则引擎。可选`[re2, regexp]`，默认`re2`。我们推荐公开实例不要调整这个选项，这个选项目前主要用于向后兼容。
 
 `ALLOW_USER_SUPPLY_UNSAFE_DOMAIN`: 允许用户为路由提供域名作为参数。建议公共实例不要调整此选项，开启后可能会导致 [服务端请求伪造（SSRF）](https://owasp.org/www-community/attacks/Server_Side_Request_Forgery)
 
@@ -150,13 +166,17 @@ healthcheck:
 
 `NODE_NAME`: 节点名，用于负载均衡，识别当前节点
 
-`PUPPETEER_WS_ENDPOINT`: 用于 puppeteer.connect 的浏览器 websocket 链接，见 [browserWSEndpoint](https://zhaoqize.github.io/puppeteer-api-zh_CN/#?product=Puppeteer&show=api-browserwsendpoint)
+`USER_ROUTES_PATH`: 私有路由模块目录，默认不设置。支持 Node 和 Docker 部署。目录中放置导出 `namespace` 和 `routes` 的独立 `.mjs` ES 模块；模块在启动时加载，修改后需要重启。私有命名空间不能覆盖内置命名空间。设置此变量本身不会启用访问保护，需要时应另行配置 `ACCESS_KEY` 或保护实例。模块格式和挂载方式见 [私有路由](/zh/deploy#private-routes)。
 
-`CHROMIUM_EXECUTABLE_PATH`: Chromium（或 Chrome）的可执行路径。若 puppeteer 没有下载捆绑的 Chromium（主动跳过下载或体系架构为 arm/arm64），设置此项可启用 puppeteer。或者，偏好 Chrome 而不是 Chromium 时，此项也很有用。**注意**：`PUPPETEER_WS_ENDPOINT` 被设置时，此项不生效；仅在手动部署时有用，对于 Docker 部署，请改用 `chromium-bundled` 版本镜像。
+`PLAYWRIGHT_WS_ENDPOINT`: 使用 [Playwright 协议](https://playwright.dev/docs/api/class-browsertype#browser-type-connect)的远程浏览器 WebSocket 地址，服务端需要使用兼容的 Playwright 版本。不要将 Chromium CDP 地址填入此配置。不设置 `PLAYWRIGHT_WS_ENDPOINT` 时，仍支持以 `PUPPETEER_WS_ENDPOINT` 作为兼容别名。
+
+`PLAYWRIGHT_CDP_ENDPOINT`: Node 部署使用的 Chromium [Chrome DevTools Protocol 地址](https://playwright.dev/docs/api/class-browsertype#browser-type-connect-over-cdp)。Docker Compose 的 Browserless V2 服务使用 `ws://browserless:3000?token=<token>`，其中 token 必须与 Browserless 服务的 `TOKEN` 一致。在 Node 中，此配置优先于 `PLAYWRIGHT_WS_ENDPOINT` 和本地启动的浏览器。Worker 使用 `PLAYWRIGHT_WS_ENDPOINT` 或 Browser Run 绑定。
+
+`CHROMIUM_EXECUTABLE_PATH`: Playwright 启动本地 Chromium 或 Chrome 时使用的可执行文件路径。只有在未配置 CDP 或 WebSocket 地址时生效。Docker 部署使用本地浏览器时，可选择 `chromium-bundled` 镜像。
 
 `TITLE_LENGTH_LIMIT`: 限制输出标题的字节长度，一个英文字符的长度为 1 字节，部分语言如中文，日文，韩文或阿拉伯文等，统一算作 2 字节，默认 `150`
 
-`FORMAT`: [输出格式](/zh/guide/parameters#输出格式)，默认 `rss`；如果订阅地址中指定了 `format` 参数，将覆盖此设置
+`FORMAT`: [输出格式](/zh/guide/parameters#tong-yong-can-shu-shu-chu-ge-shi)，默认 `rss`；如果订阅地址中指定了 `format` 参数，将覆盖此设置
 
 `OPENAI_API_KEY`: OpenAI API Key，用于使用 ChatGPT 总结文章
 
@@ -172,7 +192,7 @@ healthcheck:
 
 `REMOTE_CONFIG`: 远程配置地址，用于动态更新配置，地址应返回一个环境变量名作为 key 的 JSON，会在应用启动时加载并合并本地配置，与本地配置冲突时以远程配置为准，但请注意部分基础配置项不支持从远程获取
 
-## 部分 RSS 模块配置 {#route-specific-configurations}
+## 部分 RSS 模块配置
 
 :::tip
 
@@ -221,6 +241,10 @@ healthcheck:
     3.  打开控制台，刷新
     4.  找到 `https://webapp.bupt.edu.cn/extensions/wap/news/list.html?p-1&type=xnxw` 请求
     5.  找到请求头中的 Cookie
+
+### Ci-en
+
+-   `CI_EN_COOKIE`: 可选的 Ci-en 登录账号 Cookie 请求头值，用于 `/dlsite/ci-en/:id/article`。列表和详情请求使用同一 Cookie，详情缓存按 Cookie 值隔离。不设置时读取公开文章；订阅者文章仍受该账号和已订阅方案的访问权限限制。
 
 ### Civitai
 
@@ -275,12 +299,7 @@ healthcheck:
 
 ### Instagram
 
--   `IG_USERNAME`: Instagram 用户名（仅 Private API）
--   `IG_PASSWORD`: Instagram 密码（仅 Private API）
--   `IG_PROXY`: Instagram 代理 URL（仅 Private API，可选）
--   `IG_COOKIE`: Instagram 登录后的 Cookie（仅 Cookie）
-
-注意，暂**不支持**两步验证。
+-   `INSTAGRAM_COOKIE`: Instagram 登录后的 Cookie，只需要 `sessionid` 和 `ds_user_id` 两项。公开主页可不填，快拍、精选快拍、话题标签和私密主页必填。仍兼容 `IG_COOKIE` 作为回退。
 
 ### Iwara
 
@@ -401,9 +420,13 @@ healthcheck:
 -   `TWITTER_PASSWORD`: Twitter 密码
 -   `TWITTER_PHONE_OR_EMAIL`: 可选，Twitter 手机号码或电子邮件地址
 -   `TWITTER_AUTHENTICATION_SECRET`: 可选，Twitter 两步验证 -> 认证应用 -> `otpauth://totp/Twitter:@_RSSHub?secret=xxxxxxxxxxxxxxxx&issuer=Twitter` 中的 secret 部分
+-   `TWITTER_AUTH_TOKEN`: 本人获授权的 X 会话中 `auth_token` Cookie 值。`/twitter/spaces/:username` 必须配置；开发者 API key 和第三方时间线路由服务不提供该路由所需的发言状态。请在自己的实例配置，会话失效时更新。
+
+`/twitter/spaces/:username` 订阅用户主持、共同主持或正在发言的直播 Space，也包括由其他人主持的 Space，不包含仅收听的参与者。条目使用 Space 实际开始时间和稳定的用户/Space GUID；当前没有发言时返回固定状态条目，不添加发布时间。路由不会加入或收听 Space。
 
 ### Wordpress
 
+-   `WORDPRESS_ALLOWED_DOMAINS`: WordPress 路由允许访问的精确主机名列表，以英文逗号分隔，例如 `wordpress.org,blog.example.com`。默认列表为空，可在保持 `ALLOW_USER_SUPPLY_UNSAFE_DOMAIN` 关闭时使用这些站点。配置项会去除首尾空格，匹配时不区分大小写。只填写主机名，不带协议、端口、路径或通配符；各子域名需要单独列出。若开启 `ALLOW_USER_SUPPLY_UNSAFE_DOMAIN`，则允许任意 WordPress 主机名。
 -   `WORDPRESS_CDN`: 用于中转 http 图片链接。可供考虑的服务见下表：
 
     | url                                                                              | backbone     |
@@ -445,11 +468,27 @@ healthcheck:
 -   `DIDA365_USERNAME`: 滴答清单用户名
 -   `DIDA365_PASSWORD`: 滴答清单密码
 
+### 抖音
+
+`/douyin/live/:rid/:showTime?` 默认保留现有标题。将 `showTime` 设为 `1` 或 `true`，可在标题后添加 RSSHub 本场首次检测时间（UTC+8）。这是检测时间，并非源站实际开播时间，也不会写入 `pubDate`。记录按本场真实 room ID 缓存 30 天，读取不延长有效期；清除缓存或重启使用内存缓存的实例会重置记录，使用 Redis 可跨重启保留。
+
+-   `DOUYIN_COOKIE`: 本人登录抖音网页版后的请求头 Cookie。`/douyin/likes/self` 和 `/douyin/collection` 必须配置；`/douyin/likes/:uid` 的喜欢列表必须对当前账号可见。路由只读取首屏，使用视频原始发布时间，抖音没有提供点赞或收藏时间。请在具有访问控制的实例上配置，会话过期后更新 Cookie。
+
+    获取方法：登录 [抖音网页版](https://www.douyin.com)，打开浏览器 Network 面板，切换到喜欢或收藏的视频标签，复制对应 `aweme/favorite` 或 `aweme/listcollection` 请求头中的 `Cookie`。不要将 Cookie 放入订阅地址。收藏路由仅涵盖收藏的视频，暂不涵盖收藏夹、音乐、合集及短剧。
+
 ### 豆瓣
 
-用于想看
+-   `DOUBAN_COOKIE`: 本人登录豆瓣后的 Cookie，用于个人列表和需要登录的小组帖子；公开帖子可不配置。账号必须具有查看对应内容的权限。
 
--   `DOUBAN_COOKIE`: 豆瓣登陆后的 Cookie 值
+`/douban/group/topic/:id/:author?` 订阅主帖和首屏回复。`author` 默认为 `all`，填写 `author` 时使用源站的“只看楼主”页面。主帖标题或正文变化会生成新 GUID，回复保留源站创建日期。源站回复按从早到晚排序，长帖后续页面的新回复暂不覆盖。
+
+用户广播和话题会将源详情页明确显示的 IP 属地放入分类：作者为 `IP属地：…`，首屏回帖为 `回帖IP属地：…`。可使用通用参数筛选，例如 `filter_category=^IP属地：广东$`。个人资料所在地不作为 IP 属地；仅登录可见的详情需要 `DOUBAN_COOKIE`，源站没有提供的字段会省略。
+
+### 雪球
+
+`/xueqiu/column/:id` 的专栏页面和内容接口也会使用已配置的 Cookie。未配置时尝试匿名访客会话；如果源站对访客隐藏文章，需要配置能查看该专栏的登录账号。
+
+-   `XUEQIU_COOKIES`: 本人登录[雪球](https://xueqiu.com)后的请求头 Cookie。`/xueqiu/user_stock/:id` 必须配置，`/xueqiu/snb/:id` 会使用已配置的 Cookie。账号必须能在源站查看对应自选列表或组合。会话失效时需要更新 Cookie；无法访问的数据会明确报错，不会作为正常空订阅返回。
 
 ### 饭否
 
@@ -510,7 +549,9 @@ healthcheck:
 
 -   `WEIBO_APP_KEY`: 微博 App Key
 -   `WEIBO_APP_SECRET`: 微博 App Secret
--   `WEIBO_REDIRECT_URL`: 微博登录授权回调地址，默认为 `RSSHub 地址/weibo/timeline/0`，自定义回调地址请确保最后可以转跳到 `RSSHub 地址/weibo/timeline/0?code=xxx`
+-   `WEIBO_REDIRECT_URL`: 微博 OAuth 授权回调地址，默认为 `<RSSHub 请求来源>/weibo/timeline/0`。自定义回调必须将 OAuth 返回的 `code` 和 `state` 两个查询参数原样转发至 `<RSSHub 地址>/weibo/timeline/0?code=<oauth-code>&state=<returned-state>`。
+
+    开启 `ACCESS_KEY` 后，先使用有效的 RSSHub `key` 或访问 `code` 打开所需时间线路由来发起授权。RSSHub 会生成十分钟内有效的一次性 `state`，回调时消费该状态，并转跳到带有对应路由访问码的最终订阅地址。此流程需要可用的 memory 或 Redis 缓存，HTTP 和 KV 缓存不支持受保护的回调流程。状态过期或已经使用时，需要重新发起授权。配置的 `WEIBO_REDIRECT_URL` 不得包含 RSSHub 的 `key` 或访问 `code` 参数；应保留微博实际返回的 OAuth `code` 和 `state`。
 
 用于自定义分组
 

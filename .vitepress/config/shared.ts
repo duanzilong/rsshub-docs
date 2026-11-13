@@ -3,6 +3,9 @@ import { resolve } from 'node:path';
 import VueI18nPlugin from '@intlify/unplugin-vue-i18n/vite';
 import { defineConfig, type DefaultTheme } from 'vitepress';
 
+import { slugify } from '../theme/slugify.ts';
+import { routeSections } from './searchRoutes.ts';
+
 const telegramLogo = /* HTML */ `
   <?xml version="1.0" encoding="UTF-8"?>
   <svg
@@ -37,10 +40,11 @@ export const shared = defineConfig({
   title: 'RSSHub',
   description: 'Everything is RSSible 🧡',
   srcDir: 'src',
+  base: process.env.DOCS_BASE || '/',
   vite: {
     plugins: [
       VueI18nPlugin({
-        include: [resolve(__dirname, '../theme/i18n/*.json')],
+        include: [resolve(import.meta.dirname, '../theme/i18n/*.json')],
         ssr: true,
       }),
     ],
@@ -52,6 +56,31 @@ export const shared = defineConfig({
     theme: {
       light: 'github-light',
       dark: 'github-dark',
+    },
+    config(md) {
+      md.core.ruler.before('anchor', 'nested_anchor', (state) => {
+        const stack: string[] = [];
+        const seen = new Set<string>();
+        for (const [i, token] of state.tokens.entries()) {
+          if (token.type !== 'heading_open') {
+            continue;
+          }
+          const level = Number(token.tag[1]);
+          const title = (state.tokens[i + 1].children ?? [])
+            .filter((t) => !['html_inline', 'emoji'].includes(t.type))
+            .map((t) => t.content)
+            .join('');
+          stack.length = level - 1;
+          stack[level - 1] = slugify(title);
+          const base = stack.filter(Boolean).join('-');
+          let id = base;
+          for (let n = 1; seen.has(id); n++) {
+            id = `${base}-${n}`;
+          }
+          seen.add(id);
+          token.attrSet('id', id);
+        }
+      });
     },
   },
 
@@ -82,7 +111,15 @@ export const shared = defineConfig({
     search: {
       provider: 'local',
       options: {
+        async _render(src, env, md) {
+          if (!src) {
+            return ' ';
+          }
+          const html = await md.renderAsync(src, env);
+          return env.frontmatter?.search === false ? '' : html;
+        },
         miniSearch: {
+          _splitIntoSections: routeSections as DefaultTheme.MiniSearchOptions['_splitIntoSections'],
           options: {
             extractField: (document, fieldName) => {
               if (fieldName !== 'text' || document.id.includes('/routes/')) {

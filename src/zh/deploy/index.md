@@ -53,9 +53,12 @@ sidebar: auto
 | --- | --- | --- | --- |
 | `latest` | 最新 | No | `latest` |
 | `chromium-bundled` | 最新 | Yes | `chromium-bundled` |
-| `{YYYY-MM-DD}` | 特定日期 | No | `2021-06-18` |
-| `chromium-bundled-{YYYY-MM-DD}` | 特定日期 | Yes | `chromium-bundled-2021-06-18` |
+| `{YYYY-MM-DD}` | 当日构建，同一天的后续构建可能更新此标签 | No | `2021-06-18` |
+| `chromium-bundled-{YYYY-MM-DD}` | 包含 Chromium 的当日构建，同一天可能更新 | Yes | `chromium-bundled-2021-06-18` |
 | `{commit hash}` | 特定提交  | No | `e7c233b1df982fae10684a11c9df57892e96940a` |
+| `chromium-bundled-{commit hash}` | 包含 Chromium 的特定提交 | Yes | `chromium-bundled-e7c233b1df982fae10684a11c9df57892e96940a` |
+
+两种多架构镜像发布成功后，发布工作流会创建标签为 `vYYYY.MM.DD-<7位SHA>` 的 [GitHub 源码 Release](https://github.com/DIYgod/RSSHub/releases)，日期采用 UTC。Release 说明中会列出完整源码提交和对应镜像标签。Docker 部署需要固定到该版本时，使用完整的 40 位提交 SHA，或 `chromium-bundled-<完整SHA>` 作为镜像标签，例如 `ghcr.io/diygod/rsshub:<完整SHA>`。日期标签可能被当天的后续构建更新。
 
 支持 puppeteer 会占用更多资源，但支持更多路由
 
@@ -107,6 +110,29 @@ $ docker-compose up -d
 
 修改 [docker-compose.yml](https://github.com/DIYgod/RSSHub/blob/master/docker-compose.yml) 中的 `environment` 进行配置
 
+### Browserless V2 {#browserless-v2}
+
+当前 Compose 文件使用 [Browserless V2](https://docs.browserless.io/enterprise/open-source) 的 `ghcr.io/browserless/chromium` 镜像。以下配置通过 CDP 连接 RSSHub 和浏览器服务：
+
+```yaml
+services:
+    rsshub:
+        environment:
+            PLAYWRIGHT_CDP_ENDPOINT: 'ws://browserless:3000?token=${BROWSERLESS_TOKEN:-rsshub}'
+    browserless:
+        image: ghcr.io/browserless/chromium
+        environment:
+            TOKEN: '${BROWSERLESS_TOKEN:-rsshub}'
+        healthcheck:
+            test: ['CMD-SHELL', 'curl -f "http://localhost:3000/pressure?token=$$TOKEN"']
+```
+
+在 Compose 的 `.env` 文件中设置 `BROWSERLESS_TOKEN`，确保端点的 `token` 与 Browserless 的 `TOKEN` 一致。仓库中的文件在未设置该变量时使用 `rsshub`。合并这段配置时，保留已有的 Redis、端口、服务依赖以及 RSSHub 和 Redis 的健康检查；Browserless 的健康检查需要按上例添加 token。`$$TOKEN` 会将 `$TOKEN` 交给容器内的 shell 展开，而不是由宿主机上的 Compose 展开。
+
+更新镜像不会替换已经下载的 Compose 文件。迁移已有部署时，需要手工更新 Browserless 镜像，将原来的 WebSocket 配置替换为 `PLAYWRIGHT_CDP_ENDPOINT`，添加一致的 `TOKEN`，并更新 Browserless 健康检查。随后执行 `docker-compose pull` 和 `docker-compose up -d` 拉取镜像并重新创建服务。
+
+`PLAYWRIGHT_CDP_ENDPOINT` 使用 Chrome DevTools Protocol。`PLAYWRIGHT_WS_ENDPOINT` 用于[原生 Playwright 服务端点](https://playwright.dev/docs/api/class-browsertype#browser-type-connect)，协议不同，且服务端与客户端的 Playwright 版本需要匹配。上面的 Browserless 服务应使用 CDP 配置。
+
 ## Docker 部署
 
 :::warning
@@ -157,6 +183,55 @@ $ docker rm rsshub
 ```bash
 $ docker run -d --name rsshub -p 1200:1200 -e CACHE_EXPIRE=3600 -e GITHUB_ACCESS_TOKEN=example diygod/rsshub
 ```
+
+<span id="private-routes"></span>
+
+### 私有路由 {#private-routes}
+
+Node.js 和 Docker 部署可以从指定目录加载独立的 `.mjs` 私有路由模块，无需改动 RSSHub 内置路由。每个文件名定义一个命名空间；已有命名空间和保留的服务路径受到保护，不能被替换。
+
+在 Compose 文件旁创建 `routes-user/personal.mjs`。模块导出 `namespace` 和 `routes` 数组，每个 handler 返回 RSSHub 的 `Data` 结构：
+
+```js
+export const namespace = { name: 'Personal', url: 'example.com' };
+
+export const routes = [
+    {
+        path: '/news',
+        name: 'News',
+        maintainers: [],
+        handler: async () => ({
+            title: 'Personal news',
+            link: 'https://example.com/',
+            item: [
+                {
+                    title: 'Example item',
+                    link: 'https://example.com/#item-1',
+                    description: '<p>Replace this item with content from your own source.</p>',
+                },
+            ],
+        }),
+    },
+];
+```
+
+该模块注册 `/personal/news`。将示例条目替换为源站文章，每条使用稳定且唯一的 `link`。源站提供发布时间时填写 `pubDate`，时间未知时省略。
+
+将以下内容合并到已有 RSSHub 服务，以只读方式挂载模块，并将 `USER_ROUTES_PATH` 设置为容器内路径：
+
+```yaml
+services:
+    rsshub:
+        environment:
+            USER_ROUTES_PATH: /app/routes-user
+            ACCESS_KEY: '${ACCESS_KEY:?Set ACCESS_KEY in the Compose .env file}'
+        volumes:
+            - ./routes-user:/app/routes-user:ro
+```
+
+在 Compose 的 `.env` 文件中设置 `ACCESS_KEY`，订阅时使用文档中的 `key` 或 `code` 参数认证。按照[访问控制配置](/zh/deploy/config#pei-zhi-fang-wen-kong-zhi-pei-zhi)设置访问凭据和需要认证的健康检查。
+
+手动部署 Node.js 时，将 `USER_ROUTES_PATH` 设置为宿主机上该目录的绝对路径。新增或修改模块后重启 RSSHub。独立模块使用 JavaScript，不支持 TypeScript 或 RSSHub 的 `@/` 导入别名。运行时目录加载适用于 Node.js 和 Docker；Workers 需要在构建时包含私有路由。
 
 ## 手动部署
 
@@ -393,6 +468,22 @@ sudo ansible-playbook rsshub.yaml
 # 举例：如果您的 RSSHub 用户使用 https://rsshub.example.com 访问您的 RSSHub 实例，输入 rsshub.example.com（去掉 https://）
 ```
 
+## 保持分叉更新
+
+从分叉部署的方式（Vercel、Heroku、Fly.io 等）只有在分叉更新后才会用上 RSSHub 的新改动。
+
+- 手动更新：在分叉的 GitHub 页面点击「Sync fork」，再点「Update branch」。
+- 自动更新：RSSHub 自带一个「Sync fork」工作流，每天从 RSSHub 同步一次你的分叉。
+    1.  打开分叉的 Actions 页面启用工作流，然后只保留「Sync fork」工作流，停用其他工作流。
+    2.  创建一个带 `workflow` 权限的 [个人访问令牌](https://github.com/settings/tokens)，或者对分叉的 Contents 和 Workflows 有读写权限的细粒度令牌，保存为名为 `SYNC_TOKEN` 的仓库 secret。不配置的话，工作流会使用默认令牌，它无法更新 `.github/workflows/` 下的文件，RSSHub 改动工作流时同步就会失败。
+    3.  想立即同步，可以在 Actions 页面手动运行「Sync fork」工作流。
+
+::: danger
+在分叉里启用工作流后，RSSHub 的其他工作流（例如每周的全量路由测试）也会一起启用，用不到的可以在 Actions 页面单独停用。
+:::
+
+如果你的分叉里有和 RSSHub 冲突的改动，同步会失败，需要你自己解决冲突。
+
 ## 部署到 Vercel
 
 ### 一键部署（无自动更新）
@@ -403,7 +494,7 @@ sudo ansible-playbook rsshub.yaml
 
 1.  将 RSSHub [分叉（fork）](https://github.com/DIYgod/RSSHub/fork) 到自己的账户下
 2.  去 Vercel 部署一个新项目：使用 GitHub 账户登录 Vercel，进入 [项目创建页面](https://vercel.com/new/) 选择导入 RSSHub 仓库进行部署
-3.  安装 [Pull](https://github.com/apps/pull) 应用，定期将 RSSHub 改动自动同步至你的仓库
+3.  按 [保持分叉更新](#bu-shu-bao-chi-fen-cha-geng-xin) 设置自动同步，定期将 RSSHub 改动同步至你的仓库
 
 ::: tip
 如果在部署过程中遇到 `ERR_REQUIRE_ESM` 错误，需要启用 Node.js 实验性的 require() ES Module 支持。在 Vercel 项目设置中添加环境变量 `NODE_OPTIONS=--experimental-require-module`。详见 [Vercel 文档](https://vercel.com/docs/functions/runtimes/node-js/advanced-node-configuration#experimental-node.js-require-of-es-module)。
@@ -415,7 +506,39 @@ RSSHub 支持一键部署到 Cloudflare Workers。
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/DIYgod/RSSHub)
 
-通过 [Cloudflare Browser Rendering](https://developers.cloudflare.com/browser-rendering/) 支持 puppeteer，通过 [Cloudflare Workers KV](https://developers.cloudflare.com/kv/) 支持缓存。
+通过 [Cloudflare Browser Run](https://developers.cloudflare.com/browser-run/playwright/) 支持 Playwright，通过 [Cloudflare Workers KV](https://developers.cloudflare.com/kv/) 支持缓存。
+
+### 浏览器会话复用 {#browser-session-reuse}
+
+未设置 `PLAYWRIGHT_WS_ENDPOINT` 时，RSSHub 使用 `BROWSER` 绑定处理浏览器请求。在这种情况下，仓库中的 `wrangler.toml` 通过 `BrowserSession` Durable Object，在不同请求和 Worker isolate 之间协调共享 Browser Run 会话。每个请求使用独立的浏览器上下文；清理时关闭该上下文并断开 Playwright 客户端连接，取得的会话继续保留供后续请求复用，空闲超时为 60 秒。后续请求重新连接时会替换已过期的会话。若配置了 `PLAYWRIGHT_WS_ENDPOINT`，则优先使用远程服务。协议行为可参考 Cloudflare 的 [Playwright 会话复用说明](https://developers.cloudflare.com/browser-run/playwright/#session-reuse)。
+
+自行维护 Wrangler 配置时，同步保留以下配置：
+
+```toml
+compatibility_date = "2026-09-01"
+compatibility_flags = ["global_fetch_strictly_public"]
+
+[browser]
+binding = "BROWSER"
+
+[[durable_objects.bindings]]
+name = "BROWSER_SESSIONS"
+class_name = "BrowserSession"
+
+[[migrations]]
+tag = "browser-session-v1"
+new_sqlite_classes = ["BrowserSession"]
+```
+
+Worker 入口还需要导出 `BrowserSession`；RSSHub 的 `lib/worker.ts` 已包含：
+
+```ts
+export { BrowserSession } from './utils/browser-session.worker';
+```
+
+已有 Worker 使用 migrations 时，应保留原有迁移记录；如果尚未创建 `BrowserSession`，再追加使用唯一 tag 的新类迁移。更新自定义配置时，同步保留 `BROWSER`、`BROWSER_SESSIONS`、类导出和迁移。示例沿用仓库的迁移格式；采用其他类生命周期配置的部署可参考 [Durable Object 类迁移文档](https://developers.cloudflare.com/durable-objects/reference/durable-object-class-migrations-legacy/)。
+
+未配置 `BROWSER_SESSIONS` 时，每次使用 `BROWSER` 绑定的浏览器请求都会启动 Browser Run 会话。复用可以减少重复启动，费用变化需要在部署后核对账户用量与最新的 [Browser Run 计费规则](https://developers.cloudflare.com/browser-run/platform/pricing/)。
 
 ## 部署到 Zeabur
 
@@ -437,7 +560,7 @@ RSSHub 支持一键部署到 Cloudflare Workers。
 1.  将 RSSHub [分叉（fork）](https://github.com/DIYgod/RSSHub/fork) 到自己的账户下。
 2.  把自己的分叉部署到 Heroku：`https://heroku.com/deploy?template=URL`，其中 `URL` 改为分叉地址 （例如 `https://github.com/USERNAME/RSSHub`）。
 3.  检查 Heroku 设置，随代码库更新自动部署。
-4.  安装 [Pull](https://github.com/apps/pull) 应用，定期将 RSSHub 改动自动同步至你的分叉。
+4.  按 [保持分叉更新](#bu-shu-bao-chi-fen-cha-geng-xin) 设置自动同步，定期将 RSSHub 改动同步至你的分叉。
 
 ## 部署到 Fly.io
 
@@ -456,13 +579,13 @@ RSSHub 支持一键部署到 Cloudflare Workers。
 
 4.  运行 `fly launch`, 并选择一个唯一的名称和实例地区；
 
-5.  使用 `fly secrets set KEY=VALUE` [对部分模块进行配置](config#route-specific-configurations)；
+5.  使用 `fly secrets set KEY=VALUE` [对部分模块进行配置](config#pei-zhi-bu-fen-rss-mo-kuai-pei-zhi)；
 
 6.  [配置通过 GitHub Actions 自动部署](https://fly.io/docs/app-guides/continuous-deployment-with-github-actions/)；
 
 7.  （可选）利用 `fly certs add 你的域名` 来配置自定义域名，并根据指引在你的 DNS 服务商配置相关域名解析（你可在 Dashboard Certificate 页面查看域名的配置状态）。
 
-更新：在你 Fork 出来的仓库首页点击「Sync fork - Update Branch」来手动更新至官方最新的 master 分支，或安装 [Pull](https://github.com/apps/pull) 应用来定期自动同步。
+更新：在你 Fork 出来的仓库首页点击「Sync fork - Update Branch」来手动更新至官方最新的 master 分支，或按 [保持分叉更新](#bu-shu-bao-chi-fen-cha-geng-xin) 设置定期自动同步。
 
 ### 方案二：自行维护 fly.toml
 
@@ -475,8 +598,8 @@ RSSHub 支持一键部署到 Cloudflare Workers。
     image = "diygod/rsshub:latest"
     ```
 
-    根据实际情况，你可能希望使用其他镜像标签，请阅读 [Docker 镜像](#docker-jing-xiang) 的有关内容；
-4.  修改 fly.toml 中的 `[env]` 段或使用`fly secrets set KEY=VALUE` [对部分模块进行配置](config#route-specific-configurations)；
+    根据实际情况，你可能希望使用其他镜像标签，请阅读 [Docker 镜像](#bu-shu-docker-jing-xiang) 的有关内容；
+4.  修改 fly.toml 中的 `[env]` 段或使用`fly secrets set KEY=VALUE` [对部分模块进行配置](config#pei-zhi-bu-fen-rss-mo-kuai-pei-zhi)；
 5.  执行 `fly deploy` 启动应用；
 6.  （可选）利用 `fly certs add 你的域名` 来配置自定义域名，并根据指引在你的 DNS 服务商配置相关域名解析（你可在 Dashboard Certificate 页面查看域名的配置状态）。
 
@@ -507,6 +630,10 @@ $ fly secrets set CACHE_TYPE=redis REDIS_URL='<刚才的连接 URL>'
 包含自动更新。
 
 [![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/template/QxW\_\_f?referralCode=9wT3hc)
+
+从 GitHub 源码部署时，将服务的 Root Directory 设为仓库根目录。Railway 会自动使用根目录的 `Dockerfile` 构建，依赖安装使用项目声明的 Corepack/pnpm 版本。不要设置自定义构建和启动命令，让 Railway 使用 Dockerfile 及其启动命令。RSSHub 会读取 Railway 提供的 `PORT` 环境变量。
+
+如果用上面的模板部署后出现 `yarn@pnpm@...` 或全局 Yarn 版本错误并不断重启，原因是模板把服务的启动命令设成了 `yarn start`。这条命令会替换镜像自带的启动命令，运行 Node.js 镜像里的 Yarn 1。请在 RSSHub 服务的设置中清空自定义启动命令（或改为 `npm run start`），然后重新部署。模板还设置了 `CACHE_TYPE=redis`，却没有传入 Redis 地址，请在 RSSHub 服务中添加 `REDIS_URL` 变量并引用 Redis 服务的 `REDIS_URL`，否则 RSSHub 会回退到 `localhost:6379`，缓存不会生效。配置说明见 Railway 的 [Dockerfile 文档](https://docs.railway.com/builds/dockerfiles)和[启动命令说明](https://docs.railway.com/deployments/start-command)。
 
 ## 部署到 Google App Engine
 
@@ -595,6 +722,14 @@ Sealos 模板会部署 RSSHub、Redis 缓存、Browserless、Redis 持久化存�
 每月只需 1 美元即可运行 RSSHub。包括自动更新和 5 美元的免费起始额度。
 
 [![Run on PikaPods](https://www.pikapods.com/static/run-button.svg)](https://www.pikapods.com/pods?run=rsshub)
+
+## 部署到 Pethost
+
+[Pethost](https://pethost.dev) 通过一键模板运行 RSSHub（包含 Redis 和 Browserless），并通过 HTTPS 提供访问，每月 €9.99 起。
+
+[![Deploy on Pethost](https://pethost.dev/button.svg)](https://console.pethost.dev/?template=rsshub)
+
+如需直接部署上文的 [docker-compose.yml](https://github.com/DIYgod/RSSHub/blob/master/docker-compose.yml)，可安装 [Pethost CLI](https://pethost.dev/docs/cli/)，在该文件所在目录运行 `pethost deploy`。配置与更新可参见 [Pethost 指南](https://pethost.dev/blog/self-host-rsshub/)。
 
 ## Play with Docker
 
